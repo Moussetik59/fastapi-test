@@ -1,3 +1,6 @@
+# Ignorer les clés privées
+*.env
+
 # Ignorer l'environnement virtuel
 venv/
 
