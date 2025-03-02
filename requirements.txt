@@ -1,2 +1,4 @@
 fastapi
 uvicorn
+opencensus-ext-azure
+python-dotenv
