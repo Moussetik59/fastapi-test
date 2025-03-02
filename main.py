@@ -8,10 +8,10 @@ from opencensus.ext.azure.log_exporter import AzureLogHandler
 load_dotenv()
 
 # === Configuration des logs Azure Application Insights ===
-connection_string = os.getenv("APPINSIGHTS_CONNECTION_STRING")
+connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
 
 if not connection_string:
-    raise ValueError("APPINSIGHTS_CONNECTION_STRING n'est pas défini dans les variables d'environnement.")
+    raise ValueError("APPLICATIONINSIGHTS_CONNECTION_STRING n'est pas défini dans les variables d'environnement.")
 
 logger = logging.getLogger("api_logger")
 logger.setLevel(logging.INFO)
