@@ -1,0 +1,15 @@
+# Ignorer l'environnement virtuel
+venv/
+
+# Ignorer les fichiers Python compilés
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignorer les fichiers de logs
+logs/
+*.log
+
+# Ignorer les fichiers de dépendances générés
+pip-log.txt
+pip-delete-this-directory.txt
