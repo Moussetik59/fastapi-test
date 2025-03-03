@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import tensorflow as tf
+import asyncio
 from azure.storage.blob import BlobServiceClient
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -12,94 +13,129 @@ from opencensus.ext.azure.log_exporter import AzureLogHandler
 import logging
 import uvicorn
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
-# Charger les variables d'environnement depuis le fichier .env si présent
+# Charger les variables d'environnement
 load_dotenv()
 
-# === Configuration Azure Blob Storage ===
+# Configuration des logs
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("api_logger")
+
+# Définition des variables globales
 AZURE_STORAGE_ACCOUNT_NAME = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
 AZURE_STORAGE_ACCOUNT_KEY = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 CONTAINER_NAME = "models"
 
-if not AZURE_STORAGE_ACCOUNT_NAME or not AZURE_STORAGE_ACCOUNT_KEY:
-    raise ValueError("Les informations Azure Storage ne sont pas définies dans les variables d'environnement.")
-
-# Dossier local des modèles
-MODEL_DIR = "models"
+# Définir un chemin absolu compatible Windows et Linux
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Répertoire du script
+MODEL_DIR = os.path.join(BASE_DIR, "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Vérifier si les identifiants Azure sont bien définis
+if not AZURE_STORAGE_ACCOUNT_NAME or not AZURE_STORAGE_ACCOUNT_KEY:
+    raise ValueError("❌ Les informations Azure Storage ne sont pas définies dans les variables d'environnement.")
 
 def download_model_from_azure(blob_name):
     """Télécharge un modèle depuis Azure Blob Storage si non présent en local."""
     local_file_path = os.path.join(MODEL_DIR, blob_name)
-    if not os.path.exists(local_file_path):
-        print(f"Téléchargement de {blob_name} depuis Azure...")
-        try:
-            blob_service_client = BlobServiceClient(
-                account_url=f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
-                credential=AZURE_STORAGE_ACCOUNT_KEY
-            )
-            blob_client = blob_service_client.get_blob_client(CONTAINER_NAME, blob_name)
-            with open(local_file_path, "wb") as f:
-                f.write(blob_client.download_blob().readall())
-            print(f"{blob_name} téléchargé avec succès !")
-        except Exception as e:
-            print(f"Erreur lors du téléchargement de {blob_name} : {e}")
-            return None
+    
+    if os.path.exists(local_file_path):
+        logger.info(f"✅ {blob_name} est déjà présent localement.")
+        return local_file_path
+
+    logger.info(f"⬇️ Téléchargement de {blob_name} depuis Azure...")
+
+    try:
+        blob_service_client = BlobServiceClient(
+            account_url=f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net",
+            credential=AZURE_STORAGE_ACCOUNT_KEY
+        )
+        blob_client = blob_service_client.get_blob_client(CONTAINER_NAME, blob_name)
+
+        with open(local_file_path, "wb") as f:
+            f.write(blob_client.download_blob().readall())
+
+        # Vérification après téléchargement
+        if os.path.exists(local_file_path):
+            file_size = os.path.getsize(local_file_path)
+            logger.info(f"✅ {blob_name} téléchargé avec succès ! Taille : {file_size} octets")
+        else:
+            raise FileNotFoundError(f"🚨 Le fichier {blob_name} n'a pas été trouvé après téléchargement.")
+
+    except Exception as e:
+        logger.error(f"❌ Erreur lors du téléchargement de {blob_name} : {e}")
+        return None
+
     return local_file_path
 
-# Liste des modèles à récupérer
-model_files = [
-    "best_model_fasttext.keras",
-    #"best_model_glove.keras",
-    #"best_model_w2v.keras",
-    "tokenizer_fasttext.json"
-    #"tokenizer_glove.json",
-    #"tokenizer_w2v.json"
-]
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global model, tokenizer
 
-for model in model_files:
-    download_model_from_azure(model)
-print("Tous les modèles sont prêts à être utilisés !")
+    logger.info("🚀 Démarrage de l'API...")
 
-# === Configuration des logs Azure Application Insights ===
-connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
-if not connection_string:
-    raise ValueError("APPLICATIONINSIGHTS_CONNECTION_STRING n'est pas défini dans les variables d'environnement.")
+    # Liste des fichiers à récupérer
+    model_files = [
+        "best_model_fasttext.keras",
+        "tokenizer_fasttext.json"
+    ]
 
-logger = logging.getLogger("api_logger")
-logger.setLevel(logging.INFO)
-azure_handler = AzureLogHandler(connection_string=connection_string)
-logger.addHandler(azure_handler)
-logger.info("API démarrée - Logs connectés à Azure Application Insights")
+    for model_file in model_files:
+        download_model_from_azure(model_file)
+        await asyncio.sleep(2)  # Attente pour éviter les conflits d'accès
 
-# === Chargement du modèle ===
-model_path = os.path.join(MODEL_DIR, "best_model_fasttext.keras")
-if not os.path.exists(model_path):
-    raise FileNotFoundError(f"Modèle non trouvé : {model_path}")
+    logger.info("✅ Tous les fichiers nécessaires sont prêts !")
 
-try:
-    model = tf.keras.models.load_model(model_path)
-    logger.info("Modèle chargé avec succès !")
-except Exception as e:
-    logger.error(f"Erreur de chargement du modèle : {e}")
-    raise ValueError(f"Erreur de chargement du modèle : {e}")
+    # === Définition du chemin du modèle avec normalisation multi-OS ===
+    model_path = os.path.abspath(os.path.join(MODEL_DIR, "best_model_fasttext.keras"))
+    logger.info(f"📂 Chemin normalisé du modèle : {model_path}")
 
-# === Chargement du tokenizer JSON ===
-tokenizer_path = os.path.join(MODEL_DIR, "tokenizer_fasttext.json")
-if not os.path.exists(tokenizer_path):
-    raise FileNotFoundError(f"Tokenizer non trouvé : {tokenizer_path}")
+    # Vérification avant chargement
+    if not os.path.exists(model_path):
+        logger.error(f"🚨 ERREUR : Le fichier {model_path} est introuvable après téléchargement !")
+        raise FileNotFoundError(f"Le fichier {model_path} est introuvable après téléchargement.")
+    else:
+        file_size = os.path.getsize(model_path)
+        logger.info(f"✅ Le fichier {model_path} est présent. Taille : {file_size} octets")
 
-try:
-    with open(tokenizer_path, "r", encoding="utf-8") as f:
-        tokenizer_data = json.load(f)
-        tokenizer = tokenizer_from_json(tokenizer_data)
-    logger.info("Tokenizer chargé avec succès !")
-except Exception as e:
-    logger.error(f"Erreur de chargement du tokenizer : {e}")
-    raise ValueError(f"Erreur de chargement du tokenizer : {e}")
+    # Attente supplémentaire pour éviter les problèmes de verrouillage (notamment sous Linux)
+    await asyncio.sleep(2)
+
+    # Chargement du modèle avec gestion des erreurs
+    try:
+        logger.info(f"📂 Tentative de chargement du modèle depuis : {model_path}")
+        model = tf.keras.models.load_model(model_path)
+        logger.info("✅ Modèle chargé avec succès !")
+    except Exception as e:
+        logger.error(f"❌ ERREUR lors du chargement du modèle : {e}")
+        raise ValueError(f"Erreur de chargement du modèle : {e}")
+
+    # === Vérification de la structure du modèle ===
+    logger.info("📊 Affichage de la structure du modèle :")
+    model.summary(print_fn=lambda x: logger.info(x))
+
+    # === Chargement du tokenizer JSON ===
+    tokenizer_path = os.path.abspath(os.path.join(MODEL_DIR, "tokenizer_fasttext.json"))
+    if not os.path.exists(tokenizer_path):
+        raise FileNotFoundError(f"❌ Le fichier tokenizer {tokenizer_path} est introuvable.")
+
+    try:
+        logger.info(f"📂 Chargement du tokenizer depuis : {tokenizer_path}")
+        with open(tokenizer_path, "r", encoding="utf-8") as f:
+            tokenizer_data = json.load(f)
+            tokenizer = tokenizer_from_json(tokenizer_data)
+        logger.info("✅ Tokenizer chargé avec succès !")
+    except Exception as e:
+        logger.error(f"❌ Erreur lors du chargement du tokenizer : {e}")
+        raise ValueError(f"Erreur de chargement du tokenizer : {e}")
+
+    yield  # Maintien du contexte FastAPI
+
+    logger.info("🛑 Arrêt de l'API...")
 
 # === Initialisation de FastAPI ===
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/", include_in_schema=False)
 async def redirect_to_docs():
@@ -108,56 +144,35 @@ async def redirect_to_docs():
 class TextInput(BaseModel):
     text: str
 
-class FeedbackInput(BaseModel):
-    text: str
-    prediction: str
-    validation: bool
-
 @app.post("/predict")
 async def predict(input: TextInput):
     try:
         if not input.text.strip():
-            raise HTTPException(status_code=400, detail="Le texte d'entrée est vide")
+            raise HTTPException(status_code=400, detail="❌ Le texte d'entrée est vide")
+
+        logger.info(f"📝 Texte reçu : {input.text}")
+
         sequence = tokenizer.texts_to_sequences([input.text])
         sequence_padded = pad_sequences(sequence, maxlen=50, padding="post", truncating="post")
+
+        logger.info(f"📊 Séquence transformée : {sequence_padded}")
+
         prediction = model.predict(sequence_padded)
         sentiment = "positive" if prediction[0][0] > 0.5 else "negative"
-        logger.info(f"Prédiction : {sentiment} | Texte : {input.text}")
+
+        logger.info(f"🔮 Prédiction : {sentiment}")
+
         return {"prediction": sentiment}
+
     except HTTPException as he:
-        logger.warning(f"Mauvaise requête : {he.detail}")
+        logger.warning(f"⚠️ Mauvaise requête : {he.detail}")
         raise he
     except Exception as e:
-        logger.error(f"Erreur de prédiction : {str(e)}")
+        logger.error(f"❌ Erreur de prédiction : {str(e)}")
         raise HTTPException(status_code=500, detail="Erreur serveur lors de la prédiction")
 
-error_feedback_counter = {}
-
-@app.post("/feedback")
-async def feedback(input: FeedbackInput):
-    try:
-        if not input.text.strip():
-            raise HTTPException(status_code=400, detail="Le texte du tweet est vide")
-        if input.prediction not in ["positive", "negative"]:
-            raise HTTPException(status_code=400, detail="Prédiction invalide")
-        if not input.validation:
-            logger.warning(f"Tweet mal prédit : {input.text} | Prédiction : {input.prediction}")
-            error_feedback_counter[input.text] = error_feedback_counter.get(input.text, 0) + 1
-            if error_feedback_counter[input.text] >= 3:
-                logger.error("ALERTE : Plusieurs tweets mal prédits détectés !")
-        return {"message": "Feedback enregistré, merci !"}
-    except HTTPException as he:
-        logger.warning(f"Mauvaise requête : {he.detail}")
-        raise he
-    except Exception as e:
-        logger.error(f"Erreur lors du feedback : {str(e)}")
-        raise HTTPException(status_code=500, detail="Erreur serveur lors du feedback")
-
-@app.get("/test_log")
-async def test_log():
-    logger.info("Test de log envoyé à Application Insights.")
-    return {"message": "Log envoyé avec succès à Azure !"}
-
+# === Lancement de l'application FastAPI ===
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
+    logger.info(f"🌍 Lancement du serveur sur le port {port}...")
     uvicorn.run("main:app", host="0.0.0.0", port=port)
