@@ -16,3 +16,9 @@ logs/
 # Ignorer les fichiers de dépendances générés
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Ignorer les models
+models/
+*.json
+*.keras
+

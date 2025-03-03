@@ -3,3 +3,6 @@ uvicorn
 opencensus-ext-azure
 python-dotenv
 azure-storage-blob
+tensorflow
+pydantic
+requests
