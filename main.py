@@ -15,6 +15,8 @@ import uvicorn
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 # Charger les variables d'environnement
 load_dotenv()
 
