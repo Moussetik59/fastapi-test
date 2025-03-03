@@ -52,7 +52,7 @@ model_files = [
     "best_model_fasttext.keras",
     #"best_model_glove.keras",
     #"best_model_w2v.keras",
-    "tokenizer_fasttext.json",
+    "tokenizer_fasttext.json"
     #"tokenizer_glove.json",
     #"tokenizer_w2v.json"
 ]
