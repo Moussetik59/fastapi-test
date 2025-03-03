@@ -3,6 +3,7 @@ import json
 import requests
 import tensorflow as tf
 import asyncio
+import threading
 from azure.storage.blob import BlobServiceClient
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
@@ -15,6 +16,7 @@ import uvicorn
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
+# Désactiver l'utilisation du GPU pour éviter les erreurs sur Azure
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 # Charger les variables d'environnement
@@ -71,17 +73,33 @@ def download_model_from_azure(blob_name):
 
     return local_file_path
 
+def load_model():
+    """Charge le modèle en arrière-plan après le démarrage de l'API."""
+    global model
+    model_path = os.path.abspath(os.path.join(MODEL_DIR, "best_model_fasttext.keras"))
+
+    logger.info(f"📂 Tentative de chargement du modèle depuis : {model_path}")
+
+    if not os.path.exists(model_path):
+        logger.error(f"🚨 ERREUR : Le fichier {model_path} est introuvable après téléchargement !")
+        return
+
+    try:
+        model = tf.keras.models.load_model(model_path)
+        logger.info("✅ Modèle chargé avec succès !")
+        logger.info("📊 Structure du modèle :")
+        model.summary(print_fn=lambda x: logger.info(x))
+    except Exception as e:
+        logger.error(f"❌ ERREUR lors du chargement du modèle : {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, tokenizer
+    global tokenizer
 
     logger.info("🚀 Démarrage de l'API...")
 
     # Liste des fichiers à récupérer
-    model_files = [
-        "best_model_fasttext.keras",
-        "tokenizer_fasttext.json"
-    ]
+    model_files = ["best_model_fasttext.keras", "tokenizer_fasttext.json"]
 
     for model_file in model_files:
         download_model_from_azure(model_file)
@@ -89,33 +107,8 @@ async def lifespan(app: FastAPI):
 
     logger.info("✅ Tous les fichiers nécessaires sont prêts !")
 
-    # === Définition du chemin du modèle avec normalisation multi-OS ===
-    model_path = os.path.abspath(os.path.join(MODEL_DIR, "best_model_fasttext.keras"))
-    logger.info(f"📂 Chemin normalisé du modèle : {model_path}")
-
-    # Vérification avant chargement
-    if not os.path.exists(model_path):
-        logger.error(f"🚨 ERREUR : Le fichier {model_path} est introuvable après téléchargement !")
-        raise FileNotFoundError(f"Le fichier {model_path} est introuvable après téléchargement.")
-    else:
-        file_size = os.path.getsize(model_path)
-        logger.info(f"✅ Le fichier {model_path} est présent. Taille : {file_size} octets")
-
-    # Attente supplémentaire pour éviter les problèmes de verrouillage (notamment sous Linux)
-    await asyncio.sleep(2)
-
-    # Chargement du modèle avec gestion des erreurs
-    try:
-        logger.info(f"📂 Tentative de chargement du modèle depuis : {model_path}")
-        model = tf.keras.models.load_model(model_path)
-        logger.info("✅ Modèle chargé avec succès !")
-    except Exception as e:
-        logger.error(f"❌ ERREUR lors du chargement du modèle : {e}")
-        raise ValueError(f"Erreur de chargement du modèle : {e}")
-
-    # === Vérification de la structure du modèle ===
-    logger.info("📊 Affichage de la structure du modèle :")
-    model.summary(print_fn=lambda x: logger.info(x))
+    # === Chargement du modèle en arrière-plan ===
+    threading.Thread(target=load_model, daemon=True).start()
 
     # === Chargement du tokenizer JSON ===
     tokenizer_path = os.path.abspath(os.path.join(MODEL_DIR, "tokenizer_fasttext.json"))
@@ -153,6 +146,10 @@ async def predict(input: TextInput):
             raise HTTPException(status_code=400, detail="❌ Le texte d'entrée est vide")
 
         logger.info(f"📝 Texte reçu : {input.text}")
+
+        # Vérifier si le modèle est chargé avant de prédire
+        if 'model' not in globals():
+            raise HTTPException(status_code=503, detail="Le modèle est en cours de chargement, veuillez réessayer plus tard.")
 
         sequence = tokenizer.texts_to_sequences([input.text])
         sequence_padded = pad_sequences(sequence, maxlen=50, padding="post", truncating="post")
