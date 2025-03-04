@@ -32,8 +32,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ✅ Étape ajoutée : Copier les modèles AVANT de créer le ZIP
-      - name: Ensure models directory is included
+      # ✅ Étape : Inclure les modèles dans le ZIP (ils seront extraits plus tard)
+      - name: Ensure models directory is included in package
         run: |
           mkdir -p models
           cp -r models/* ./models/
