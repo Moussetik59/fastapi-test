@@ -9,3 +9,7 @@ __pycache__/
 # Ignorer les fichiers de logs
 logs/
 *.log
+
+models/
+*.keras
+*.json
