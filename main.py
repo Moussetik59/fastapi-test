@@ -7,6 +7,8 @@ from pydantic import BaseModel
 from opencensus.ext.azure.log_exporter import AzureLogHandler
 import logging
 import uvicorn
+import threading
+import time
 from dotenv import load_dotenv  # Ajout de dotenv pour charger les variables d'environnement locales
 
 # Charger les variables d'environnement depuis un fichier .env s'il existe (utile en local)
@@ -42,33 +44,40 @@ vocab_path = os.path.join(base_dir, "models", "tv_layer_vocabulary.txt")
 if not os.path.exists(model_path):
     raise FileNotFoundError(f"Model file not found: {model_path}")
 
-# Chargement du modèle
-try:
-    model = tf.keras.models.load_model(model_path)
-    logger.info("Model loaded successfully.")
-except ValueError as e:
-    logger.error("Error loading model: ensure it is in a compatible format (.keras or .h5).")
-    raise ValueError("Error loading model: ensure it is in a compatible format (.keras or .h5).") from e
+# Indicateur pour savoir si le modèle est bien chargé
+model = None
+tv_layer = None
+model_loaded = False  # Variable pour indiquer si le modèle est bien chargé
 
-# Chargement de la configuration de TextVectorization
-try:
-    with open(config_path, "r") as file:
-        tv_layer_config = json.load(file)
+def load_model():
+    global model, tv_layer, model_loaded
+    try:
+        logger.info("Starting model loading in a background thread...")
+        model = tf.keras.models.load_model(model_path)
+        logger.info("Model loaded successfully.")
 
-    # Créer la couche TextVectorization
-    tv_layer = tf.keras.layers.TextVectorization.from_config(tv_layer_config)
+        # Chargement de la configuration de TextVectorization
+        with open(config_path, "r") as file:
+            tv_layer_config = json.load(file)
 
-    # Charger le vocabulaire
-    with open(vocab_path, "r", encoding="utf-8") as vocab_file:
-        vocabulary = [line.strip() for line in vocab_file]
+        # Créer la couche TextVectorization
+        tv_layer = tf.keras.layers.TextVectorization.from_config(tv_layer_config)
 
-    # Définir le vocabulaire dans la couche TextVectorization
-    tv_layer.set_vocabulary(vocabulary)
+        # Charger le vocabulaire
+        with open(vocab_path, "r", encoding="utf-8") as vocab_file:
+            vocabulary = [line.strip() for line in vocab_file]
 
-    logger.info("TextVectorization layer configured successfully.")
-except Exception as e:
-    logger.error(f"Error setting up TextVectorization layer: {str(e)}")
-    raise RuntimeError(f"Error setting up TextVectorization layer: {str(e)}")
+        # Définir le vocabulaire dans la couche TextVectorization
+        tv_layer.set_vocabulary(vocabulary)
+
+        logger.info("TextVectorization layer configured successfully.")
+        model_loaded = True  # Indique que tout est prêt
+    except Exception as e:
+        logger.error(f"Error loading model: {str(e)}")
+        model_loaded = False
+
+# Lancer le chargement du modèle dans un thread séparé
+threading.Thread(target=load_model, daemon=True).start()
 
 # Initialiser l'application FastAPI
 app = FastAPI()
@@ -87,9 +96,20 @@ class FeedbackInput(BaseModel):
     prediction: str
     validation: bool
 
+# Vérifier si le modèle est chargé avant d'accepter des prédictions
+def wait_for_model():
+    max_wait_time = 60  # Temps max d'attente en secondes
+    waited = 0
+    while not model_loaded and waited < max_wait_time:
+        time.sleep(1)
+        waited += 1
+    if not model_loaded:
+        raise HTTPException(status_code=503, detail="Model is still loading, please try again later.")
+
 # Point de terminaison pour les prédictions
 @app.post("/predict")
 async def predict(input: TextInput):
+    wait_for_model()  # Assurer que le modèle est bien chargé avant de faire une prédiction
     try:
         # Vectoriser le texte d'entrée
         sequences = tv_layer([input.text])
