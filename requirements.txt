@@ -21,3 +21,4 @@ proto-plus==1.25.0
 PyJWT==2.10.0
 python-dotenv
 azure-storage-blob==12.19.1
+streamlit
