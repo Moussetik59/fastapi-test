@@ -14,7 +14,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read #This is required for actions/checkout
+      contents: read # This is required for actions/checkout
 
     steps:
       - uses: actions/checkout@v4
@@ -52,8 +52,8 @@ jobs:
       name: 'Production'
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
-      id-token: write #This is required for requesting the JWT
-      contents: read #This is required for actions/checkout
+      id-token: write # This is required for requesting the JWT
+      contents: read # This is required for actions/checkout
 
     steps:
       - name: Download artifact from build job
@@ -64,7 +64,13 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      
+      - name: Ensure models directory is in place
+        run: |
+          mkdir -p /home/site/wwwroot/models
+          cp -r models/* /home/site/wwwroot/models/
+          echo "Models directory contents:"
+          ls -lh /home/site/wwwroot/models/
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -78,4 +84,3 @@ jobs:
         with:
           app-name: 'fastapi-test-app'
           slot-name: 'Production'
-          
