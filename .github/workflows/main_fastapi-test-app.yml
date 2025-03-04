@@ -31,9 +31,14 @@ jobs:
       
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
+      # ✅ Étape ajoutée : Copier les modèles AVANT de créer le ZIP
+      - name: Ensure models directory is included
+        run: |
+          mkdir -p models
+          cp -r models/* ./models/
+
+      # ✅ On zippe tout le projet, y compris les modèles
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
 
@@ -63,13 +68,6 @@ jobs:
 
       - name: Unzip artifact for deployment
         run: unzip release.zip
-
-      - name: Ensure models directory is in place
-        run: |
-          mkdir -p /home/site/wwwroot/models
-          cp -r models/* /home/site/wwwroot/models/
-          echo "Models directory contents:"
-          ls -lh /home/site/wwwroot/models/
 
       - name: Login to Azure
         uses: azure/login@v2
