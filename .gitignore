@@ -10,6 +10,3 @@ __pycache__/
 logs/
 *.log
 
-models/
-*.keras
-*.json
