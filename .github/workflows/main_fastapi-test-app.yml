@@ -32,13 +32,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ✅ Étape : Inclure les modèles dans le ZIP (ils seront extraits plus tard)
+      # ✅ Supprime la copie des modèles pour éviter l'erreur
       - name: Ensure models directory is included in package
-        run: |
-          mkdir -p models
-          cp -r models/* ./models/
+        run: ls -lh models/
 
-      # ✅ On zippe tout le projet, y compris les modèles
+      # ✅ Ajoute les fichiers modèles dans le ZIP pour le déploiement
       - name: Zip artifact for deployment
         run: zip release.zip ./* -r
 
